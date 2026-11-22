@@ -1,0 +1,128 @@
+# Mantenimiento predictivo de bombas de agua
+
+Raspberry Pi Pico 2 W programada en MicroPython con Thonny.
+Componentes: ADXL345, INA219, DS18B20, módulo de relé y bomba de 12 V DC.
+
+Archivos que se copian a la Pico:
+
+- sensores.py: drivers de los tres sensores.
+- main.py: programa principal (calibración, índice de salud, tendencia, relé y comandos).
+
+Archivos que crea el programa dentro de la Pico:
+
+- linea_base.json: valores de la bomba sana.
+- registro.csv: historial de mediciones para el informe.
+
+
+## 1. Conexiones
+
+| Componente | Pin del módulo | Va a |
+|---|---|---|
+| ADXL345 | VCC | 3V3(OUT), pin 36 de la Pico |
+| ADXL345 | GND | GND |
+| ADXL345 | SDA | GP4, pin 6 |
+| ADXL345 | SCL | GP5, pin 7 |
+| ADXL345 | CS | 3V3 (activa el modo I2C) |
+| ADXL345 | SDO | GND (dirección 0x53) |
+| INA219 | VCC | 3V3(OUT) |
+| INA219 | GND | GND |
+| INA219 | SDA | GP4 (mismo bus que el ADXL345) |
+| INA219 | SCL | GP5 (mismo bus que el ADXL345) |
+| INA219 | VIN+ | + de la fuente de 12 V |
+| INA219 | VIN- | COM del relé |
+| Relé | VCC | VBUS, pin 40 (5 V del USB), si el módulo es de 5 V |
+| Relé | GND | GND |
+| Relé | IN | GP15, pin 20 |
+| Relé | NO | + de la bomba |
+| Bomba | - | GND de la fuente de 12 V |
+| DS18B20 | rojo | 3V3(OUT) |
+| DS18B20 | negro | GND |
+| DS18B20 | amarillo (datos) | GP16, pin 21 |
+
+Notas:
+
+- La tierra de la fuente de 12 V debe unirse con la tierra de la Pico. Sin esa unión, el INA219 no mide bien.
+- El ADXL345 se conecta por I2C y no por SPI, como dice la imagen referencial. Así comparte los dos cables del bus con el INA219 y el código es más corto. Es el mismo módulo.
+- El DS18B20 necesita una resistencia de 4.7 kΩ entre el cable de datos y 3V3. El código activa la resistencia interna de la Pico, que a veces basta con cable corto, pero no es confiable. Si el programa dice "DS18B20 no encontrado", falta esa resistencia.
+- El ADXL345 va fijo a la carcasa de la bomba, en el soporte impreso. El DS18B20 va pegado al cuerpo del motor, no metido en el agua.
+- Si el relé se activa al revés (la bomba prende cuando debería estar apagada), cambiar RELE_ACTIVO_EN_ALTO a False en main.py.
+
+
+## 2. Puesta en marcha en Thonny
+
+1. Instalar MicroPython en la Pico: Tools > Options > Interpreter, elegir "MicroPython (Raspberry Pi Pico)" y luego "Install or update MicroPython", variante Pico 2 W.
+2. Abrir sensores.py y main.py en Thonny. En cada uno: File > Save as > Raspberry Pi Pico, con el mismo nombre.
+3. Ejecutar main.py con el botón verde.
+4. La primera vez calibra durante 2 minutos. La bomba debe estar sana, con agua y sin nada que la obstruya.
+5. Abrir View > Plotter para ver las curvas.
+
+Al llamarse main.py, el programa también arranca solo cuando la Pico se alimenta sin PC. En ese caso el LED integrado indica el estado.
+
+Recomendación: antes de la primera calibración, dejar la bomba funcionando unos 10 minutos para que el motor llegue a su temperatura normal de trabajo. Si se calibra con el motor frío, el calentamiento normal puede leerse como falla.
+
+
+## 3. Qué se ve en el Plotter
+
+En modo gráfico se dibujan cuatro curvas y dos líneas de referencia:
+
+- vib, corr, temp: cuántas desviaciones estándar se aleja cada variable de la bomba sana (puntaje z).
+- salud: el peor de los tres puntajes. Es el índice de salud.
+- alerta (3) y critico (6): umbrales fijos, para ver cuándo se cruzan.
+
+Se grafican puntajes z y no valores reales porque las variables tienen escalas muy distintas: unos 30 °C frente a unos 0.05 g. En puntaje z todas oscilan alrededor de 0.
+
+
+## 4. Comandos (se escriben en la consola de Thonny y se pulsa Enter)
+
+| Letra | Acción |
+|---|---|
+| c | Recalibrar la línea base (2 minutos) |
+| r | Rearmar: volver a encender la bomba tras un estado crítico o una parada manual |
+| p | Parada manual de la bomba |
+| m | Cambiar entre modo gráfico (Plotter) y modo datos (valores reales con unidades y tiempo estimado a falla) |
+| s | Resumen: estado, índice, valores frente a la línea base, pendiente y tiempo estimado a falla |
+| h | Ayuda |
+
+
+## 5. LED integrado de la Pico
+
+| LED | Significado |
+|---|---|
+| Encendido fijo | Normal |
+| Parpadeo lento | Alerta: programar mantenimiento |
+| Parpadeo rápido | Crítico: bomba detenida, esperando el comando r |
+| Apagado | Parada manual |
+
+
+## 6. Cómo decide el sistema
+
+1. Cada segundo se toman 200 muestras del acelerómetro y se calcula la vibración RMS sin la gravedad. Además se promedian 10 lecturas de corriente y se lee la temperatura.
+2. Cada variable se compara con la bomba sana: z = (valor - media de la línea base) / desviación de la línea base.
+3. El índice de salud es el peor |z|. La temperatura solo cuenta cuando sube, porque un motor más frío no indica falla.
+4. Estados: índice menor que 3, normal; entre 3 y 6, alerta; 6 o más, o temperatura de 60 °C o más, crítico, y el relé detiene la bomba.
+5. Un cambio de estado se acepta solo si se repite en 3 lecturas seguidas. Así un golpe aislado no detiene la bomba.
+6. Parte predictiva: con los últimos 60 valores del índice se ajusta una recta por mínimos cuadrados. Si la pendiente es positiva, se estima cuánto falta para llegar a 6: tiempo = (6 - índice actual) / pendiente.
+7. El estado crítico queda enclavado: la bomba no vuelve a arrancar sola aunque las lecturas mejoren.
+
+Si un sensor deja de responder durante la marcha, el programa se detiene y la bomba se apaga.
+
+
+## 7. Fallas para simular en la demostración
+
+- Marcha en seco: sacar la manguera de entrada del agua. La corriente baja y la temperatura empieza a subir.
+- Obstrucción: pinzar la manguera de salida. Cambian la corriente y la vibración.
+- Montaje flojo: aflojar los tornillos del soporte de la bomba. Sube la vibración.
+- Degradación progresiva: pinzar la manguera de salida poco a poco durante uno o dos minutos. Es la mejor prueba de la parte predictiva, porque se ve cómo el tiempo estimado a falla disminuye antes de llegar al estado crítico.
+
+
+## 8. Ajustes (sección 1 de main.py)
+
+- Z_ALERTA y Z_CRITICO: umbrales del índice de salud.
+- DESV_MIN: desviación mínima por variable. Si salta la alerta con cambios que a simple vista no significan nada, subir el valor de esa variable.
+- T_CALIBRACION_S: duración de la calibración.
+- PERIODO_MS y N_MUESTRAS_VIB: ritmo de medición. El periodo no debe bajar de 800 ms, porque el DS18B20 tarda unos 750 ms en cada lectura.
+
+
+## 9. Descargar los datos para el informe
+
+En Thonny: View > Files. En el panel de la Pico, clic derecho sobre registro.csv > Download. Se abre en Excel. Cada fila es una medición cada 5 segundos, con un tope de 5000 filas. Para empezar un registro nuevo, borrar registro.csv desde el mismo panel.
