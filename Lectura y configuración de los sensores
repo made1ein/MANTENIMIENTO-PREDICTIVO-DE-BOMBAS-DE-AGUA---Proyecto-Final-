@@ -1,0 +1,109 @@
+# ============================================================
+#  sensores.py
+#  Drivers mínimos para el proyecto de mantenimiento predictivo
+#   - ADXL345: acelerómetro (vibración), bus I2C
+#   - INA219:  corriente y voltaje de la bomba, bus I2C
+#   - DS18B20: temperatura del motor, bus 1-Wire
+# ============================================================
+
+import struct
+import time
+import onewire
+import ds18x20
+
+
+class ADXL345:
+    REG_ID = 0x00
+    REG_BW_RATE = 0x2C
+    REG_POWER_CTL = 0x2D
+    REG_DATA_FORMAT = 0x31
+    REG_DATOS = 0x32           # 6 bytes: X, Y, Z (16 bits cada uno)
+    G_POR_CUENTA = 0.0039      # resolución completa: 3.9 mg por cuenta
+
+    def __init__(self, i2c, direccion=0x53):
+        self.i2c = i2c
+        self.dir = direccion
+        self.buf = bytearray(6)
+        if self.i2c.readfrom_mem(self.dir, self.REG_ID, 1)[0] != 0xE5:
+            raise OSError("ADXL345 no responde: revisar cableado (CS a 3V3, SDO a GND)")
+        self._escribir(self.REG_BW_RATE, 0x0E)       # 1600 muestras por segundo
+        self._escribir(self.REG_DATA_FORMAT, 0x09)   # resolución completa, rango ±4 g
+        self._escribir(self.REG_POWER_CTL, 0x08)     # modo medición
+
+    def _escribir(self, registro, valor):
+        self.i2c.writeto_mem(self.dir, registro, bytes([valor]))
+
+    def leer_crudo(self):
+        """Lectura de los tres ejes en cuentas (enteros con signo)."""
+        self.i2c.readfrom_mem_into(self.dir, self.REG_DATOS, self.buf)
+        return struct.unpack("<hhh", self.buf)
+
+    def vibracion_rms(self, n):
+        """Toma n muestras y devuelve la vibración RMS en g.
+
+        A cada eje se le resta su promedio, así se elimina la gravedad
+        y queda solo la parte que oscila. Para cada eje:
+            varianza = promedio(x^2) - promedio(x)^2
+        Se calcula con enteros para no perder precisión, y al final
+        se suman las tres varianzas y se saca la raíz.
+        """
+        sx = sy = sz = 0
+        sxx = syy = szz = 0
+        for _ in range(n):
+            x, y, z = self.leer_crudo()
+            sx += x
+            sy += y
+            sz += z
+            sxx += x * x
+            syy += y * y
+            szz += z * z
+        # n^2 * varianza total, en enteros (exacto)
+        suma = (n * sxx - sx * sx) + (n * syy - sy * sy) + (n * szz - sz * sz)
+        varianza = suma / (n * n)
+        return (varianza ** 0.5) * self.G_POR_CUENTA
+
+
+class INA219:
+    REG_CONFIG = 0x00
+    REG_SHUNT = 0x01           # voltaje en la resistencia shunt, 10 µV por cuenta
+    REG_BUS = 0x02             # voltaje de la bomba, 4 mV por cuenta
+
+    def __init__(self, i2c, direccion=0x40, r_shunt=0.1):
+        self.i2c = i2c
+        self.dir = direccion
+        self.r_shunt = r_shunt   # el módulo trae una resistencia de 0.1 ohm
+        try:
+            # configuración de fábrica: hasta 32 V y ±320 mV en el shunt (±3.2 A)
+            self.i2c.writeto_mem(self.dir, self.REG_CONFIG, b"\x39\x9f")
+        except OSError:
+            raise OSError("INA219 no responde: revisar SDA, SCL y alimentación")
+
+    def corriente(self):
+        """Corriente en amperios: ley de Ohm sobre la resistencia shunt."""
+        crudo = struct.unpack(">h", self.i2c.readfrom_mem(self.dir, self.REG_SHUNT, 2))[0]
+        return crudo * 10e-6 / self.r_shunt
+
+    def voltaje(self):
+        """Voltaje de alimentación de la bomba en voltios."""
+        crudo = struct.unpack(">H", self.i2c.readfrom_mem(self.dir, self.REG_BUS, 2))[0]
+        return (crudo >> 3) * 0.004
+
+
+class DS18B20:
+    """La conversión tarda unos 750 ms. Para no detener el programa,
+    se inicia una conversión y se lee el resultado en la vuelta siguiente."""
+
+    def __init__(self, pin):
+        self.sensor = ds18x20.DS18X20(onewire.OneWire(pin))
+        encontrados = self.sensor.scan()
+        if not encontrados:
+            raise OSError("DS18B20 no encontrado: revisar cable de datos y resistencia pull-up")
+        self.rom = encontrados[0]
+        self.sensor.convert_temp()
+        time.sleep_ms(750)
+
+    def iniciar_conversion(self):
+        self.sensor.convert_temp()
+
+    def leer(self):
+        return self.sensor.read_temp(self.rom)
