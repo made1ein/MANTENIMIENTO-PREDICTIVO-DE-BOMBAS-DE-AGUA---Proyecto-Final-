@@ -29,7 +29,7 @@ PIN_DS18B20 = 16
 PIN_RELE = 15
 RELE_ACTIVO_EN_ALTO = True
 
-# [RETO] Interrupción por vibración excesiva
+# [RETO] Interrupción / disparo rápido por vibración excesiva
 USAR_INTERRUPCION = True
 PIN_INT1 = 14
 UMBRAL_EMERGENCIA_G = 3.0
@@ -39,12 +39,14 @@ N_MUESTRAS_VIB = 200
 T_CALIBRACION_S = 120
 ESPERA_ARRANQUE_S = 3
 
-Z_ALERTA = 15.0
-Z_CRITICO = 30.0
-TEMP_MAX_C = 75.0
-N_CONFIRMAR = 8
+Z_ALERTA = 3.0           # índice de salud que activa la ALERTA
+Z_CRITICO = 6.0          # índice de salud que detiene la bomba
+TEMP_MAX_C = 60.0        # límite absoluto de temperatura del motor
+N_CONFIRMAR = 3          # lecturas seguidas para aceptar un cambio de estado
 
-DESV_MIN = {"vib": 0.05, "corr": 0.15, "temp": 3.0}
+# Desviación mínima de cada variable. Evita que una línea base
+# demasiado "quieta" dispare alarmas con cambios insignificantes.
+DESV_MIN = {"vib": 0.005, "corr": 0.02, "temp": 2.0}
 
 VENTANA_TENDENCIA = 60
 PENDIENTE_MIN = 0.005
@@ -167,7 +169,7 @@ def medir():
 
 
 def calibrar():
-    print(">>> CALIBRACION: la bomba debe estar sana, con agua y sin obstrucciones")
+    print(">>> CALIBRACION: la bomba debe estar sana y sin obstrucciones")
     desarmar_interrupcion()
     bomba(True)
     time.sleep(ESPERA_ARRANQUE_S)
@@ -383,7 +385,7 @@ async def tarea_wifi_y_nube():
 
 async def tarea_sensores_y_control():
     """Ciclo principal de monitoreo y protección cada PERIODO_MS."""
-    global modo_grafico, parada_manual, candidato, cuenta, ultimo_paquete_nube
+    global estado, modo_grafico, parada_manual, candidato, cuenta, ultimo_paquete_nube
 
     base = cargar_base()
     if base is None:
@@ -404,6 +406,18 @@ async def tarea_sensores_y_control():
             atender_emergencia()
 
         vib, corr, volt, temp = medir()
+
+        # Disparo rápido por umbral instantáneo (sin cable físico en GP14)
+        t0_us = time.ticks_us()
+        if estado != CRITICO and not parada_manual and vib >= UMBRAL_EMERGENCIA_G:
+            bomba(False)
+            desarmar_interrupcion()
+            estado = CRITICO
+            lat_us = time.ticks_diff(time.ticks_us(), t0_us)
+            print(">>> EMERGENCIA disparo rapido (vibracion > {:.1f} g): rele abierto en {} us".format(
+                UMBRAL_EMERGENCIA_G, lat_us))
+            print("    bomba detenida. Revisar y escribir r para rearmar")
+
         t = time.ticks_diff(time.ticks_ms(), t_cero) / 1000
         zv, zc, zt = puntajes_z(base, vib, corr, temp)
         salud, causa = indice_salud(zv, zc, zt)
