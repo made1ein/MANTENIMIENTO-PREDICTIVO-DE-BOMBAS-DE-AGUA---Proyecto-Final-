@@ -39,14 +39,14 @@ N_MUESTRAS_VIB = 200
 T_CALIBRACION_S = 120
 ESPERA_ARRANQUE_S = 3
 
-Z_ALERTA = 3.0           # índice de salud que activa la ALERTA
-Z_CRITICO = 6.0          # índice de salud que detiene la bomba
-TEMP_MAX_C = 60.0        # límite absoluto de temperatura del motor
-N_CONFIRMAR = 3          # lecturas seguidas para aceptar un cambio de estado
+Z_ALERTA = 15.0           # índice de salud que activa la ALERTA
+Z_CRITICO = 30.0          # índice de salud que detiene la bomba
+TEMP_MAX_C = 75.0        # límite absoluto de temperatura del motor
+N_CONFIRMAR = 8          # lecturas seguidas para aceptar un cambio de estado
 
 # Desviación mínima de cada variable. Evita que una línea base
 # demasiado "quieta" dispare alarmas con cambios insignificantes.
-DESV_MIN = {"vib": 0.005, "corr": 0.02, "temp": 2.0}
+DESV_MIN = {"vib": 0.05, "corr": 0.15, "temp": 3.0}
 
 VENTANA_TENDENCIA = 60
 PENDIENTE_MIN = 0.005
